@@ -1,17 +1,20 @@
-# riji
+日迹app
 
-A new Flutter project.
+基于Flutter开发的
 
-## Getting Started
 
-This project is a starting point for a Flutter application.
 
-A few resources to get you started if this is your first Flutter project:
+\#功能
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+\-备忘录，到日期提醒
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+\-每日任务提醒
+
+\-书写日记
+
+
+
+\#杂谈
+
+代码小白一只，这是我用trae solo跑的一个离线日记应用，有什么代码冗余需要优化的，欢迎各位大佬指正
+
