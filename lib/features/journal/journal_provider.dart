@@ -55,6 +55,12 @@ class JournalProvider extends ChangeNotifier {
     await load();
   }
 
+  // 切换隐私锁
+  Future<void> toggleLock(int id, bool currentLocked) async {
+    await _repo.toggleLocked(id, currentLocked);
+    await load();
+  }
+
   // 新建日记
   Future<int> createEntry({
     String? title,

@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../../data/models/journal_entry.dart';
+import '../../shared/widgets/lock_screen.dart';
 import 'journal_edit_page.dart';
 import 'journal_provider.dart';
 
@@ -69,7 +70,13 @@ class _JournalCalendarPageState extends State<JournalCalendarPage> {
   }
 
   // 进入编辑页（新建或编辑）
+  // 如果当前已选中加锁日记，先验证身份
   Future<void> _openEditPage() async {
+    if (_selectedEntry != null && _selectedEntry!.locked) {
+      final ok = await LockScreen.verifyAccess(context, title: '查看日记');
+      if (!ok) return;
+      if (!mounted) return;
+    }
     await Navigator.push(
       context,
       MaterialPageRoute(

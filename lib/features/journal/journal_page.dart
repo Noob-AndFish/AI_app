@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../data/models/journal_entry.dart';
+import '../../shared/widgets/lock_screen.dart';
 import 'journal_calendar_page.dart';
 import 'journal_edit_page.dart';
 import 'journal_provider.dart';
@@ -38,6 +39,19 @@ class _JournalPageState extends State<JournalPage> {
     } catch (_) {
       return entryDate;
     }
+  }
+
+  // 打开日记：如果已加锁，先验证身份
+  Future<void> _openEntry(JournalEntry entry) async {
+    if (entry.locked) {
+      final ok = await LockScreen.verifyAccess(context, title: '查看日记');
+      if (!ok) return;
+      if (!mounted) return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => JournalEditPage(entry: entry)),
+    );
   }
 
   @override
@@ -99,15 +113,7 @@ class _JournalPageState extends State<JournalPage> {
                       return _JournalCard(
                         entry: entry,
                         displayDate: _formatDisplayDate(entry.entryDate),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  JournalEditPage(entry: entry),
-                            ),
-                          );
-                        },
+                        onTap: () => _openEntry(entry),
                         onToggleFavorite: () =>
                             provider.toggleFavorite(entry.id!),
                         onDelete: () => _confirmDelete(context, provider, entry),

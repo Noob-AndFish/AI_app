@@ -6,6 +6,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../data/models/journal_entry.dart';
+import '../../shared/widgets/lock_screen.dart';
 import 'journal_provider.dart';
 
 // 心情选项
@@ -57,6 +58,7 @@ class _JournalEditPageState extends State<JournalEditPage> {
   bool _isPreview = false; // false=编辑 true=预览
   bool _isSaving = false;
   int? _existingId; // 编辑模式下的日记 id
+  bool _currentLocked = false; // 当前日记是否已加锁
 
   bool get _isEditing => _existingId != null;
 
@@ -73,6 +75,7 @@ class _JournalEditPageState extends State<JournalEditPage> {
       _weather = widget.entry!.weather;
       _selectedDate = _parseDate(widget.entry!.entryDate) ?? DateTime.now();
       _existingId = widget.entry!.id;
+      _currentLocked = widget.entry!.locked;
     } else {
       // 新建模式
       _titleController = TextEditingController();
@@ -214,6 +217,32 @@ class _JournalEditPageState extends State<JournalEditPage> {
     if (mounted) Navigator.pop(context);
   }
 
+  // 切换加锁/解锁
+  // 加锁：直接加锁（用户已在 App 内）
+  // 解锁：先验证身份
+  Future<void> _toggleLock() async {
+    if (!_isEditing) return;
+
+    // 当前已加锁 → 要解锁，先验证身份
+    if (_currentLocked) {
+      final ok = await LockScreen.verifyAccess(context, title: '解锁日记');
+      if (!ok) return;
+      if (!mounted) return;
+    }
+
+    final provider = context.read<JournalProvider>();
+    await provider.toggleLock(_existingId!, _currentLocked);
+    if (mounted) {
+      setState(() => _currentLocked = !_currentLocked);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_currentLocked ? '已加锁' : '已解锁'),
+          duration: const Duration(milliseconds: 800),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -239,6 +268,25 @@ class _JournalEditPageState extends State<JournalEditPage> {
               icon: const Icon(Icons.delete_outline),
               tooltip: '删除',
               onPressed: _delete,
+            ),
+          // 加锁/解锁 overflow 菜单（仅编辑模式）
+          if (_isEditing)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              tooltip: '更多',
+              onSelected: (action) {
+                if (action == 'toggle_lock') _toggleLock();
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'toggle_lock',
+                  child: Row(children: [
+                    Icon(_currentLocked ? Icons.lock_open : Icons.lock),
+                    const SizedBox(width: 8),
+                    Text(_currentLocked ? '解锁日记' : '加锁日记'),
+                  ]),
+                ),
+              ],
             ),
         ],
       ),
