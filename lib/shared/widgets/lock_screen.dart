@@ -1,43 +1,54 @@
 // 锁屏对话框
-// 4 位数字密码输入 + 生物识别按钮 + 忘记密码重置入口
-// 模式：setPin（首次设置，输入两次确认）/ verify（验证已有密码）
+// 6 位数字密码输入 + 生物识别按钮 + 忘记密码重置入口
+// 每篇日记密码独立，按 entryId 存取
+// 模式：setPin（加锁时设置，输入两次确认）/ verify（验证已有密码）
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/app_lock_service.dart';
+import '../../features/journal/journal_provider.dart';
 
-enum _LockMode { setPin, verify }
+enum LockMode { setPin, verify }
 
 class LockScreen extends StatefulWidget {
+  final int entryId;
   final String? title;
-  final _LockMode mode;
+  final LockMode _mode;
 
   const LockScreen._({
-    super.key,
+    required this.entryId,
     this.title,
-    required this.mode,
+    required this._mode,
   });
 
-  /// 验证访问权限（外部统一入口）
-  /// - 未设置密码 → 引导首次设置（输入两次确认）
-  /// - 已设置密码 → 验证（密码或生物识别）
-  /// 返回 true 表示通过，false 表示取消
-  static Future<bool> verifyAccess(BuildContext context, {String? title}) async {
-    final service = AppLockService();
-    final isPinSet = await service.isPinSet();
-
-    if (!isPinSet) {
-      final ok = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => LockScreen._(mode: _LockMode.setPin, title: title),
-      );
-      return ok ?? false;
-    }
-
+  /// 加锁：立即弹"请设置密码"，输入两次确认
+  /// 返回 true 表示用户已完成设置（调用方需自行 toggleLock 标记 is_locked=1）
+  static Future<bool> setupForEntry(
+    BuildContext context,
+    int entryId, {
+    String? title,
+  }) async {
     final ok = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => LockScreen._(mode: _LockMode.verify, title: title),
+      builder: (_) =>
+          LockScreen._(mode: LockMode.setPin, entryId: entryId, title: title),
+    );
+    return ok ?? false;
+  }
+
+  /// 验证：校验该篇日记密码（或生物识别）
+  /// 返回 true 表示验证通过（调用方需自行解锁或放行查看）
+  static Future<bool> verifyForEntry(
+    BuildContext context,
+    int entryId, {
+    String? title,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          LockScreen._(mode: LockMode.verify, entryId: entryId, title: title),
     );
     return ok ?? false;
   }
@@ -58,7 +69,7 @@ class _LockScreenState extends State<LockScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.mode == _LockMode.verify) {
+    if (widget._mode == LockMode.verify) {
       _checkBiometrics();
     }
   }
@@ -90,7 +101,7 @@ class _LockScreenState extends State<LockScreen> {
   Future<void> _onPinComplete() async {
     setState(() => _isProcessing = true);
     try {
-      if (widget.mode == _LockMode.setPin) {
+      if (widget._mode == LockMode.setPin) {
         if (_firstPin == null) {
           // 第一次输入，暂存
           _firstPin = _enteredPin;
@@ -101,7 +112,7 @@ class _LockScreenState extends State<LockScreen> {
         } else {
           // 第二次输入，比对
           if (_enteredPin == _firstPin) {
-            await _service.setPin(_enteredPin);
+            await _service.setPinFor(widget.entryId, _enteredPin);
             if (mounted) Navigator.pop(context, true);
           } else {
             setState(() {
@@ -114,7 +125,7 @@ class _LockScreenState extends State<LockScreen> {
         }
       } else {
         // verify 模式
-        final ok = await _service.verifyPin(_enteredPin);
+        final ok = await _service.verifyPinFor(widget.entryId, _enteredPin);
         if (ok) {
           if (mounted) Navigator.pop(context, true);
         } else {
@@ -147,12 +158,13 @@ class _LockScreenState extends State<LockScreen> {
     }
   }
 
+  // 忘记密码：清空该篇密码 + 标记 is_locked=0
   Future<void> _resetPin() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('重置密码'),
-        content: const Text('重置后所有加锁日记将被解锁，请重新加锁。\n确定继续吗？'),
+        content: const Text('重置后该篇日记将被解锁，可重新加锁。\n确定继续吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -168,20 +180,22 @@ class _LockScreenState extends State<LockScreen> {
     if (confirmed != true) return;
 
     setState(() => _isProcessing = true);
-    await _service.resetPin();
+    await _service.resetPinFor(widget.entryId);
+    if (!mounted) return;
+    // 标记 is_locked=0（解锁）
+    await context.read<JournalProvider>().toggleLock(widget.entryId, true);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('密码已重置，所有日记已解锁')),
+        const SnackBar(content: Text('密码已重置，该篇日记已解锁')),
       );
-      // 视为未通过验证，关闭锁屏
-      Navigator.pop(context, false);
+      Navigator.pop(context, false); // 视为未通过验证，关闭锁屏
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isSetMode = widget.mode == _LockMode.setPin;
+    final isSetMode = widget._mode == LockMode.setPin;
     final subtitle = isSetMode
         ? (_firstPin == null ? '请设置 6 位数字密码' : '请再次输入确认')
         : '请输入密码';

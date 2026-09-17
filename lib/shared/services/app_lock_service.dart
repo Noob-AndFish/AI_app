@@ -1,38 +1,43 @@
 // 日记隐私锁服务
-// 管理 4 位数字密码（flutter_secure_storage）+ 生物识别（local_auth）
-// 重置密码 = 清空密码 + 解锁所有日记（降级处理）
+// 每篇日记独立密码（flutter_secure_storage，按 entryId 存储）+ 生物识别（local_auth）
+// "忘记密码"= 清空该篇密码 + 标记 is_locked=0（降级处理）
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
-import '../../data/repositories/journal_repository.dart';
 
 class AppLockService {
-  static const String _pinKey = 'app_lock_pin';
+  static const String _pinKeyPrefix = 'journal_pin_';
   static const int _pinLength = 6;
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
   final LocalAuthentication _localAuth = LocalAuthentication();
-  final JournalRepository _journalRepo = JournalRepository();
 
-  /// 是否已设置密码
-  Future<bool> isPinSet() async {
-    final pin = await _storage.read(key: _pinKey);
+  String _key(int entryId) => '$_pinKeyPrefix$entryId';
+
+  /// 该篇日记是否已设置密码
+  Future<bool> isPinSetFor(int entryId) async {
+    final pin = await _storage.read(key: _key(entryId));
     return pin != null && pin.length == _pinLength;
   }
 
-  /// 设置密码（覆盖旧密码）
-  Future<void> setPin(String pin) async {
+  /// 设置该篇日记密码（覆盖旧密码）
+  Future<void> setPinFor(int entryId, String pin) async {
     if (pin.length != _pinLength) {
       throw ArgumentError('密码必须是 $_pinLength 位');
     }
-    await _storage.write(key: _pinKey, value: pin);
+    await _storage.write(key: _key(entryId), value: pin);
   }
 
-  /// 验证密码
-  Future<bool> verifyPin(String pin) async {
-    final stored = await _storage.read(key: _pinKey);
+  /// 验证该篇日记密码
+  Future<bool> verifyPinFor(int entryId, String pin) async {
+    final stored = await _storage.read(key: _key(entryId));
     if (stored == null) return false;
     return stored == pin;
+  }
+
+  /// 清空该篇日记密码（不修改 is_locked 字段，由调用方处理）
+  Future<void> resetPinFor(int entryId) async {
+    await _storage.delete(key: _key(entryId));
   }
 
   /// 是否支持生物识别
@@ -46,7 +51,7 @@ class AppLockService {
     }
   }
 
-  /// 生物识别
+  /// 生物识别（设备级，作为 verify 模式的便捷入口）
   Future<bool> authenticateWithBiometrics() async {
     try {
       return await _localAuth.authenticate(
@@ -56,18 +61,6 @@ class AppLockService {
       );
     } catch (_) {
       return false;
-    }
-  }
-
-  /// 重置密码：清空密码 + 解锁所有日记
-  /// 用于"忘记密码"降级处理
-  Future<void> resetPin() async {
-    await _storage.delete(key: _pinKey);
-    final all = await _journalRepo.getAll();
-    for (final e in all) {
-      if (e.locked) {
-        await _journalRepo.toggleLocked(e.id!, true);
-      }
     }
   }
 }

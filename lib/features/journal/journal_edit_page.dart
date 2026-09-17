@@ -6,6 +6,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../data/models/journal_entry.dart';
+import '../../shared/services/app_lock_service.dart';
+import '../../shared/services/journal_export_service.dart';
 import '../../shared/widgets/lock_screen.dart';
 import 'journal_provider.dart';
 
@@ -218,28 +220,116 @@ class _JournalEditPageState extends State<JournalEditPage> {
   }
 
   // 切换加锁/解锁
-  // 加锁：直接加锁（用户已在 App 内）
-  // 解锁：先验证身份
+  // 加锁：立即弹"请设置密码"，设好后标记 is_locked=1
+  // 解锁：先验证密码，通过后清空密码并标记 is_locked=0
   Future<void> _toggleLock() async {
     if (!_isEditing) return;
 
-    // 当前已加锁 → 要解锁，先验证身份
     if (_currentLocked) {
-      final ok = await LockScreen.verifyAccess(context, title: '解锁日记');
+      // 已加锁 → 解锁，先验证
+      final ok = await LockScreen.verifyForEntry(
+        context, _existingId!, title: '解锁日记');
       if (!ok) return;
       if (!mounted) return;
+      // 验证通过：清空该篇密码 + 标记 is_locked=0
+      await AppLockService().resetPinFor(_existingId!);
+      if (!mounted) return;
+      final provider = context.read<JournalProvider>();
+      await provider.toggleLock(_existingId!, true);
+      if (mounted) {
+        setState(() => _currentLocked = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已解锁'),
+            duration: Duration(milliseconds: 800),
+          ),
+        );
+      }
+    } else {
+      // 未加锁 → 加锁，立即弹设置密码
+      final ok = await LockScreen.setupForEntry(
+        context, _existingId!, title: '加锁日记');
+      if (!ok) return;
+      if (!mounted) return;
+      // 密码已设置，标记 is_locked=1
+      final provider = context.read<JournalProvider>();
+      await provider.toggleLock(_existingId!, false);
+      if (mounted) {
+        setState(() => _currentLocked = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已加锁'),
+            duration: Duration(milliseconds: 800),
+          ),
+        );
+      }
     }
+  }
 
-    final provider = context.read<JournalProvider>();
-    await provider.toggleLock(_existingId!, _currentLocked);
-    if (mounted) {
-      setState(() => _currentLocked = !_currentLocked);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_currentLocked ? '已加锁' : '已解锁'),
-          duration: const Duration(milliseconds: 800),
+  // 导出此篇：底部弹出选 Markdown / PDF
+  void _showExportSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('导出为 Markdown'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _exportEntry(false);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_outlined),
+              title: const Text('导出为 PDF'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _exportEntry(true);
+              },
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
+
+  // 导出当前内容（含未保存的编辑）→ 落盘 + 系统分享
+  Future<void> _exportEntry(bool asPdf) async {
+    final entry = JournalEntry(
+      id: _existingId,
+      title: _titleController.text.trim().isEmpty
+          ? null
+          : _titleController.text.trim(),
+      content: _contentController.text.trim().isEmpty
+          ? null
+          : _contentController.text.trim(),
+      mood: _mood,
+      weather: _weather,
+      entryDate: _formatDate(_selectedDate),
+      isLocked: 0,
+      createdAt: widget.entry?.createdAt ?? DateTime.now().toIso8601String(),
+      updatedAt: DateTime.now().toIso8601String(),
+    );
+    final svc = JournalExportService();
+    try {
+      final path = asPdf
+          ? await svc.exportSinglePdf(entry)
+          : await svc.exportSingleMarkdown(entry);
+      await svc.shareFile(path, subject: '日记 ${entry.entryDate}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已导出：$path')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败：$e')),
+        );
+      }
     }
   }
 
@@ -269,13 +359,14 @@ class _JournalEditPageState extends State<JournalEditPage> {
               tooltip: '删除',
               onPressed: _delete,
             ),
-          // 加锁/解锁 overflow 菜单（仅编辑模式）
+          // 加锁/解锁/导出 overflow 菜单（仅编辑模式）
           if (_isEditing)
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert),
               tooltip: '更多',
               onSelected: (action) {
                 if (action == 'toggle_lock') _toggleLock();
+                if (action == 'export') _showExportSheet();
               },
               itemBuilder: (context) => [
                 PopupMenuItem(
@@ -284,6 +375,14 @@ class _JournalEditPageState extends State<JournalEditPage> {
                     Icon(_currentLocked ? Icons.lock_open : Icons.lock),
                     const SizedBox(width: 8),
                     Text(_currentLocked ? '解锁日记' : '加锁日记'),
+                  ]),
+                ),
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Row(children: [
+                    Icon(Icons.ios_share),
+                    SizedBox(width: 8),
+                    Text('导出此篇'),
                   ]),
                 ),
               ],

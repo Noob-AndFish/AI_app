@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../data/models/journal_entry.dart';
+import '../../shared/services/journal_export_service.dart';
 import '../../shared/widgets/lock_screen.dart';
 import 'journal_calendar_page.dart';
 import 'journal_edit_page.dart';
@@ -41,10 +42,11 @@ class _JournalPageState extends State<JournalPage> {
     }
   }
 
-  // 打开日记：如果已加锁，先验证身份
+  // 打开日记：如果已加锁，先验证该篇密码
   Future<void> _openEntry(JournalEntry entry) async {
     if (entry.locked) {
-      final ok = await LockScreen.verifyAccess(context, title: '查看日记');
+      final ok = await LockScreen.verifyForEntry(
+        context, entry.id!, title: '查看日记');
       if (!ok) return;
       if (!mounted) return;
     }
@@ -96,6 +98,24 @@ class _JournalPageState extends State<JournalPage> {
                 ),
               );
             },
+          ),
+          // 批量导出 overflow 菜单
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: '更多',
+            onSelected: (action) {
+              if (action == 'batch_export') _showBatchExportSheet();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'batch_export',
+                child: Row(children: [
+                  Icon(Icons.file_download_outlined),
+                  SizedBox(width: 8),
+                  Text('批量导出'),
+                ]),
+              ),
+            ],
           ),
         ],
       ),
@@ -193,6 +213,69 @@ class _JournalPageState extends State<JournalPage> {
     );
     if (confirmed == true) {
       await provider.delete(entry.id!);
+    }
+  }
+
+  // 批量导出：底部弹出选 Markdown / PDF
+  void _showBatchExportSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('批量导出为 Markdown'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _batchExport(false);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_outlined),
+              title: const Text('批量导出为 PDF'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _batchExport(true);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 批量导出当前列表（锁定日记自动跳过）→ 落盘 + 系统分享
+  Future<void> _batchExport(bool asPdf) async {
+    final provider = context.read<JournalProvider>();
+    final all = provider.entries;
+    final exportable = all.where((e) => !e.locked).toList();
+    final lockedCount = all.length - exportable.length;
+    if (exportable.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有可导出的日记（锁定日记已跳过）')),
+      );
+      return;
+    }
+    final svc = JournalExportService();
+    try {
+      final path = asPdf
+          ? await svc.exportBatchPdf(exportable)
+          : await svc.exportBatchMarkdown(exportable);
+      await svc.shareFile(path, subject: '日记合集 ${exportable.length} 篇');
+      if (mounted) {
+        final skip = lockedCount > 0 ? '（已跳过 $lockedCount 篇锁定日记）' : '';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已导出 ${exportable.length} 篇$skip：$path')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败：$e')),
+        );
+      }
     }
   }
 }
